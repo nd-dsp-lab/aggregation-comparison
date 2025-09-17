@@ -1,0 +1,32 @@
+# benchmark.manifest.template
+
+libos.entrypoint = "benchmark"
+
+loader.insecure__use_cmdline_argv = true
+loader.env.LD_LIBRARY_PATH = "/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu"
+
+fs.mounts = [
+  { path = "/lib", uri = "file:/lib" },
+  { path = "/usr/lib", uri = "file:/usr/lib" },
+  { path = "/etc", uri = "file:/etc" },
+]
+
+sgx.debug = false
+sgx.enclave_size = "256M"
+sgx.max_threads = 4
+sgx.remote_attestation = "none"
+
+sgx.trusted_files = [
+  "file:{{ gramine.libos }}",
+  "file:benchmark",
+  "file:{{ gramine.runtimedir() }}/",
+  "file:/lib/x86_64-linux-gnu/",
+  "file:/usr/lib/x86_64-linux-gnu/",
+]
+
+sgx.allowed_files = [
+  "file:encrypted_data.bin",
+  "file:encrypted_keys.bin",
+  "file:terse_data.bin",
+  "file:results.csv",
+]

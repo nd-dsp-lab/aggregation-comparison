@@ -1,0 +1,15 @@
+# Ignore build artifacts and executables
+benchmark
+benchmark.manifest
+benchmark.manifest.sgx
+benchmark.sig
+
+# Ignore generated data files
+encrypted_data.bin
+encrypted_keys.bin
+
+# Ignore sensitive files
+enclave-key.pem
+
+# Ignore miscellaneous files
+*.txt
