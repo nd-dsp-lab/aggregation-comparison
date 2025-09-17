@@ -1,6 +1,6 @@
 ### Chart 1: num_devices = 10
 
-| records_per_device | native | sgx | terse-sgx |
+| records_per_device | native | sgx | terse |
 |---:|---:|---:|---:|
 | 1 | 4,965 | 1,703 | 43,478 |
 | 10 | 48,875 | 17,223 | 709,220 |
@@ -10,7 +10,7 @@
 
 ### Chart 2: num_devices = 100
 
-| records_per_device | native | sgx | terse-sgx |
+| records_per_device | native | sgx | terse |
 |---:|---:|---:|---:|
 | 1 | 44,365 | 17,452 | 602,410 |
 | 10 | 343,289 | 150,015 | 5,917,160 |
@@ -20,7 +20,7 @@
 
 ### Chart 3: num_devices = 1000
 
-| records_per_device | native | sgx | terse-sgx |
+| records_per_device | native | sgx | terse |
 |---:|---:|---:|---:|
 | 1 | 326,584 | 148,522 | 5,617,980 |
 | 10 | 888,731 | 836,400 | 13,717,400 |
@@ -30,7 +30,7 @@
 
 ### Chart 4: num_devices = 10000
 
-| records_per_device | native | sgx | terse-sgx |
+| records_per_device | native | sgx | terse |
 |---:|---:|---:|---:|
 | 1 | 960,246 | 452,427 | 12,690,400 |
 | 10 | 1,030,080 | 836,715 | 18,580,500 |
