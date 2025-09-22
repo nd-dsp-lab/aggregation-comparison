@@ -15,6 +15,11 @@ sgx.debug = false
 sgx.enclave_size = "256M"
 sgx.max_threads = 4
 sgx.remote_attestation = "none"
+sgx.preheat_enclave = true  # Pre-allocate enclave memory
+sgx.insecure__rpc_thread_num = 4  # Enable exitless mode (development only)
+
+# Performance optimizations
+libos.check_invalid_pointers = false  # Disable pointer validation for performance
 
 sgx.trusted_files = [
   "file:{{ gramine.libos }}",

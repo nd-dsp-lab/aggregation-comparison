@@ -14,6 +14,8 @@
 #include <cstdint>  // For uint64_t, uint32_t, uint8_t
 #include <string>   // For std::stoull
 #include <stdexcept> // For std::invalid_argument
+#include <iomanip>  // For formatting
+#include <cstdlib>  // For setenv
 
 // Function to encrypt data with AES-256-GCM (unchanged)
 std::vector<uint8_t> encrypt_with_gcm(const std::vector<uint8_t>& plaintext, const uint8_t* master_key) {
@@ -101,8 +103,18 @@ struct EncryptedData {
 class AESDecryptor {
 private:
     std::unordered_map<uint32_t, std::vector<uint8_t>> device_keys;
+    EVP_CIPHER_CTX* reusable_ctx;
 
 public:
+    AESDecryptor() {
+        reusable_ctx = EVP_CIPHER_CTX_new();
+        if (!reusable_ctx) throw std::runtime_error("Failed to create EVP context");
+    }
+
+    ~AESDecryptor() {
+        if (reusable_ctx) EVP_CIPHER_CTX_free(reusable_ctx);
+    }
+
     void add_device_key(uint32_t device_id, const std::vector<uint8_t>& key) {
         device_keys[device_id] = key;
     }
@@ -113,32 +125,25 @@ public:
             throw std::runtime_error("Unknown device ID");
         }
 
-        EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
-        if (!ctx) throw std::runtime_error("Failed to create EVP context");
+        // Reset and reuse context instead of creating new one
+        EVP_CIPHER_CTX_reset(reusable_ctx);
 
-        if (EVP_DecryptInit_ex(ctx, EVP_aes_128_cbc(), NULL, key_it->second.data(), data.iv) != 1) {
-            EVP_CIPHER_CTX_free(ctx);
+        if (EVP_DecryptInit_ex(reusable_ctx, EVP_aes_128_cbc(), NULL,
+                              key_it->second.data(), data.iv) != 1) {
             throw std::runtime_error("Failed to init decryption");
         }
-        EVP_CIPHER_CTX_set_padding(ctx, 0);  // Disable padding
+        EVP_CIPHER_CTX_set_padding(reusable_ctx, 0);
 
-        uint8_t decrypted[16 + 16];  // Extra space (though not needed with no padding)
+        uint8_t decrypted[16];
         int len;
-        if (EVP_DecryptUpdate(ctx, decrypted, &len, data.encrypted_value, 16) != 1) {
-            EVP_CIPHER_CTX_free(ctx);
+        if (EVP_DecryptUpdate(reusable_ctx, decrypted, &len, data.encrypted_value, 16) != 1) {
             throw std::runtime_error("Failed to decrypt update");
         }
-        int decrypted_len = len;
 
-        if (EVP_DecryptFinal_ex(ctx, decrypted + len, &len) != 1) {
-            EVP_CIPHER_CTX_free(ctx);
+        if (EVP_DecryptFinal_ex(reusable_ctx, decrypted + len, &len) != 1) {
             throw std::runtime_error("Failed to finalize decryption");
         }
-        decrypted_len += len;
 
-        EVP_CIPHER_CTX_free(ctx);
-
-        // Extract uint64_t from first 8 bytes (assuming decrypted_len >= 8)
         return *reinterpret_cast<uint64_t*>(decrypted);
     }
 };
@@ -213,7 +218,6 @@ void generate_test_data(const std::string& data_filename, const std::string& key
     }
 }
 
-// --- NEW: Function to generate data for TERSE benchmark ---
 void generate_terse_data(const std::string& data_filename, uint64_t num_devices, uint64_t records_per_device) {
     std::ofstream data_file(data_filename, std::ios::binary);
     std::random_device rd;
@@ -230,13 +234,16 @@ void generate_terse_data(const std::string& data_filename, uint64_t num_devices,
 }
 
 int main(int argc, char* argv[]) {
+    // Set malloc optimization before any allocations
+    setenv("MALLOC_ARENA_MAX", "1", 1);
+
     // --- Argument Parsing ---
     if (argc < 2) {
         std::cerr << "Usage: " << argv[0] << " <command> [args...]" << std::endl;
         std::cerr << "Commands:" << std::endl;
         std::cerr << "  generate <num_devices> <records_per_device>" << std::endl;
         std::cerr << "  generate-terse <num_devices> <records_per_device>" << std::endl;
-        std::cerr << "  <platform> <num_devices> <records_per_device> (e.g., native, sgx, terse-sgx)" << std::endl;
+        std::cerr << "  <platform> <num_devices> <records_per_device> (e.g., native, sgx, terse)" << std::endl;
         return 1;
     }
 
@@ -245,7 +252,7 @@ int main(int argc, char* argv[]) {
     uint64_t records_per_device = 0;
 
     // Commands that require device/record counts
-    if (command == "generate" || command == "generate-terse" || command == "native" || command == "sgx" || command == "terse-sgx") {
+    if (command == "generate" || command == "generate-terse" || command == "native" || command == "sgx" || command == "terse") {
         if (argc != 4) {
             std::cerr << "Error: Command '" << command << "' requires <num_devices> and <records_per_device>." << std::endl;
             return 1;
@@ -292,6 +299,7 @@ int main(int argc, char* argv[]) {
 
     long long duration_us;
     uint64_t sum = 0;
+    double average_round_time_us = 0.0; // For CSV output
 
 #ifdef __gramine__
     struct timespec start_ts, end_ts;
@@ -329,33 +337,106 @@ int main(int argc, char* argv[]) {
         uint64_t file_total_records;
         data_ifile.read(reinterpret_cast<char*>(&file_total_records), sizeof(file_total_records));
 
-        EncryptedData data;
-        for (uint64_t i = 0; i < total_records; ++i) {
-            data_ifile.read(reinterpret_cast<char*>(&data), sizeof(data));
-            sum += decryptor.decrypt_value(data);
+        long long total_round_time = 0;
+        long long round_count = 0;
+        uint64_t records_processed = 0;
+
+        const size_t BATCH_SIZE = 1000;
+        std::vector<EncryptedData> batch(BATCH_SIZE);
+
+        #ifdef __gramine__
+            struct timespec round_start_ts, round_end_ts;
+            gramine_clock_gettime(CLOCK_MONOTONIC, &round_start_ts);
+        #else
+            auto round_start = std::chrono::high_resolution_clock::now();
+        #endif
+
+        while (records_processed < total_records) {
+            // Read batch
+            size_t records_to_read = std::min(BATCH_SIZE, total_records - records_processed);
+            data_ifile.read(reinterpret_cast<char*>(batch.data()), records_to_read * sizeof(EncryptedData));
+
+            // Process batch
+            for (size_t i = 0; i < records_to_read; ++i) {
+                sum += decryptor.decrypt_value(batch[i]);
+                records_processed++;
+
+                // Round timing logic (if needed per device boundary)
+                if (records_processed % num_devices == 0 && num_devices > 0) {
+                    #ifdef __gramine__
+                        gramine_clock_gettime(CLOCK_MONOTONIC, &round_end_ts);
+                        long long round_duration_us = (round_end_ts.tv_sec - round_start_ts.tv_sec) * 1000000LL +
+                                                    (round_end_ts.tv_nsec - round_start_ts.tv_nsec) / 1000LL;
+                        round_start_ts = round_end_ts;
+                    #else
+                        auto round_end = std::chrono::high_resolution_clock::now();
+                        long long round_duration_us = std::chrono::duration_cast<std::chrono::microseconds>(round_end - round_start).count();
+                        round_start = round_end;
+                    #endif
+
+                    total_round_time += round_duration_us;
+                    round_count++;
+                }
+            }
         }
 
-    } else if (platform == "terse-sgx") {
-        // --- TERSE Benchmark ---
+        if (round_count > 0) {
+            average_round_time_us = static_cast<double>(total_round_time) / round_count;
+        }
+
+    } else if (platform == "terse") {
         std::ifstream data_ifile(terse_data_file, std::ios::binary);
-        if (!data_ifile) { std::cerr << "Run with 'generate " << platform << "' argument first to create test data" << std::endl; return 1; }
+        if (!data_ifile) { std::cerr << "Run with 'generate-terse' argument first to create test data" << std::endl; return 1; }
 
         uint64_t file_total_records;
         data_ifile.read(reinterpret_cast<char*>(&file_total_records), sizeof(file_total_records));
 
-        // Simulate native aggregation by reading and summing values
-        uint64_t value;
-        for (uint64_t i = 0; i < total_records; ++i) {
-            data_ifile.read(reinterpret_cast<char*>(&value), sizeof(value));
-            sum += value;
+        long long total_round_time = 0;
+        long long round_count = 0;
+
+        const size_t BATCH_SIZE = 1000;
+        std::vector<uint64_t> batch(BATCH_SIZE);
+
+        for (uint64_t round = 0; round < records_per_device; ++round) {
+            #ifdef __gramine__
+                struct timespec round_start_ts, round_end_ts;
+                gramine_clock_gettime(CLOCK_MONOTONIC, &round_start_ts);
+            #else
+                auto round_start = std::chrono::high_resolution_clock::now();
+            #endif
+
+            uint64_t round_sum = 0;
+            uint64_t devices_processed = 0;
+
+            while (devices_processed < num_devices) {
+                size_t devices_to_read = std::min(BATCH_SIZE, num_devices - devices_processed);
+                data_ifile.read(reinterpret_cast<char*>(batch.data()), devices_to_read * sizeof(uint64_t));
+
+                for (size_t i = 0; i < devices_to_read; ++i) {
+                    round_sum += batch[i];
+                }
+                devices_processed += devices_to_read;
+            }
+            sum += round_sum;
+
+            #ifdef __gramine__
+                gramine_clock_gettime(CLOCK_MONOTONIC, &round_end_ts);
+                long long round_duration_us = (round_end_ts.tv_sec - round_start_ts.tv_sec) * 1000000LL + (round_end_ts.tv_nsec - round_start_ts.tv_nsec) / 1000LL;
+            #else
+                auto round_end = std::chrono::high_resolution_clock::now();
+                long long round_duration_us = std::chrono::duration_cast<std::chrono::microseconds>(round_end - round_start).count();
+            #endif
+
+            total_round_time += round_duration_us;
+            round_count++;
         }
 
-        // Simulate final in-enclave addition of a preset number
-        const uint64_t preset_number = 42;
-        sum += preset_number;
+        if (round_count > 0) {
+            average_round_time_us = static_cast<double>(total_round_time) / round_count;
+        }
 
         #ifndef __gramine__
-        std::cerr << "Warning: Running 'terse-sgx' benchmark natively. The entire operation is untrusted." << std::endl;
+        std::cerr << "Warning: Running 'terse' benchmark natively. The entire operation is untrusted." << std::endl;
         #endif
 
     } else {
@@ -373,6 +454,10 @@ int main(int argc, char* argv[]) {
 
     std::cout << "Total sum: " << sum << std::endl;
     std::cout << "Time: " << duration_us << " microseconds" << std::endl;
+    if (average_round_time_us > 0) {
+        std::cout << "Average round time: " << average_round_time_us << " microseconds" << std::endl;
+    }
+
     double ops_per_sec = 0.0;
     if (duration_us > 0) {
         ops_per_sec = (total_records * 1000000.0 / duration_us);
@@ -387,9 +472,10 @@ int main(int argc, char* argv[]) {
     results_file.open(results_filename, std::ios_base::app);
     if (results_file.is_open()) {
         if (!file_exists) {
-            results_file << "platform,num_devices,records_per_device,duration_us,ops_per_sec\n";
+            results_file << "platform,num_devices,records_per_device,duration_us,ops_per_sec,avg_round_time_us\n";
         }
-        results_file << platform << "," << num_devices << "," << records_per_device << "," << duration_us << "," << ops_per_sec << "\n";
+        results_file << platform << "," << num_devices << "," << records_per_device << "," << duration_us << ","
+                     << std::fixed << std::setprecision(2) << ops_per_sec << "," << average_round_time_us << "\n";
         results_file.close();
         std::cout << "Results appended to " << results_filename << std::endl;
     } else {

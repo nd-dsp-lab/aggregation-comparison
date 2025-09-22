@@ -15,8 +15,8 @@ RESULTS_FILE="results.csv"
 # --- Benchmark Loop Configuration ---
 # Define the combinations of devices and records you want to test.
 # Modify these arrays to control the benchmarks run by the 'loop-benchmark' command.
-DEVICE_COUNTS=(10 100 1000 10000)
-RECORD_COUNTS=(1 10 100 1000 10000)
+DEVICE_COUNTS=(1000 10000 100000)
+RECORD_COUNTS=(1000)
 
 
 # --- Helper Functions ---
@@ -31,17 +31,17 @@ usage() {
     echo "  loop-benchmark <platform>           Build once, then loop through generating and running"
     echo "                                      benchmarks for all combinations in DEVICE_COUNTS"
     echo "                                      and RECORD_COUNTS defined in the script."
-    echo "  clean                               Remove build artifacts and generated data."
+    echo "  clean [all]                         Remove build artifacts and data. Use 'all' to also remove results.csv."
     echo
     echo "Platforms:"
-    echo "  native, sgx, terse-sgx"
+    echo "  native, sgx, terse"
     exit 1
 }
 
 build_native() {
     echo "Building native binary..."
     GRAMINE_API_FLAGS=$(pkg-config --cflags --libs gramine-api 2>/dev/null || echo "")
-    g++ -std=c++17 -O3 -o "$PROGRAM_NAME" main.cpp -lssl -lcrypto $GRAMINE_API_FLAGS
+    g++ -std=c++17 -O3 -DNDEBUG -march=native -o "$PROGRAM_NAME" main.cpp -lssl -lcrypto $GRAMINE_API_FLAGS
 }
 
 build_sgx() {
@@ -65,7 +65,7 @@ do_build() {
     local platform=$1
     case $platform in
         native) build_native ;;
-        sgx|terse-sgx) build_sgx ;;
+        sgx|terse) build_sgx ;;
         *) echo "Error: Invalid platform '$platform'." >&2; usage ;;
     esac
 }
@@ -83,7 +83,7 @@ do_generate() {
     # Generation can always run natively
     case $platform in
         native|sgx) ./"$PROGRAM_NAME" generate "$devices" "$records" ;;
-        terse-sgx) ./"$PROGRAM_NAME" generate-terse "$devices" "$records" ;;
+        terse) ./"$PROGRAM_NAME" generate-terse "$devices" "$records" ;;
         *) echo "Error: Invalid platform '$platform' for generate." >&2; usage ;;
     esac
 }
@@ -97,7 +97,7 @@ do_run() {
         echo "Error: Executable not found. Please run 'build' first." >&2
         exit 1
     fi
-    if [[ "$platform" == "sgx" || "$platform" == "terse-sgx" ]] && [ ! -f "$MANIFEST_SGX" ]; then
+    if [[ "$platform" == "sgx" || "$platform" == "terse" ]] && [ ! -f "$MANIFEST_SGX" ]; then
         echo "Error: Executable/manifest not found. Please run 'build' first." >&2
         exit 1
     fi
@@ -106,7 +106,7 @@ do_run() {
     if [[ "$platform" == "native" || "$platform" == "sgx" ]] && [[ ! -f "$DATA_FILE" || ! -f "$KEY_FILE" ]]; then
         echo "Error: Data files not found. Please run 'generate $platform <dev> <rec>' first." >&2
         exit 1
-    elif [[ "$platform" == "terse-sgx" ]] && [[ ! -f "$TERSE_DATA_FILE" ]]; then
+    elif [[ "$platform" == "terse" ]] && [[ ! -f "$TERSE_DATA_FILE" ]]; then
         echo "Error: Data file ($TERSE_DATA_FILE) not found. Please run 'generate $platform <dev> <rec>' first." >&2
         exit 1
     fi
@@ -115,7 +115,7 @@ do_run() {
     case $platform in
         native) ./"$PROGRAM_NAME" native "$devices" "$records" ;;
         sgx) gramine-sgx "$PROGRAM_NAME" sgx "$devices" "$records" ;;
-        terse-sgx) gramine-sgx "$PROGRAM_NAME" terse-sgx "$devices" "$records" ;;
+        terse) gramine-sgx "$PROGRAM_NAME" terse "$devices" "$records" ;;
         *) echo "Error: Invalid platform '$platform'." >&2; usage ;;
     esac
 }
@@ -189,8 +189,14 @@ case $COMMAND in
         ;;
 
     clean)
-        echo "Cleaning up artifacts and data..."
-        rm -f "$PROGRAM_NAME" "$MANIFEST" "$MANIFEST_SGX" "$DATA_FILE" "$KEY_FILE" "$TERSE_DATA_FILE" "$RESULTS_FILE"
+        # ** MODIFIED CLEAN LOGIC **
+        if [ "$2" == "all" ]; then
+            echo "Cleaning up all artifacts, data, and results..."
+            rm -f "$PROGRAM_NAME" "$MANIFEST" "$MANIFEST_SGX" "$DATA_FILE" "$KEY_FILE" "$TERSE_DATA_FILE" "$RESULTS_FILE"
+        else
+            echo "Cleaning up artifacts and data (preserving $RESULTS_FILE)..."
+            rm -f "$PROGRAM_NAME" "$MANIFEST" "$MANIFEST_SGX" "$DATA_FILE" "$KEY_FILE" "$TERSE_DATA_FILE"
+        fi
         ;;
 
     *)
