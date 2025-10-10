@@ -26,37 +26,25 @@ usage() {
     echo "Commands:"
     echo "  all <platform> <devices> <records>  Build, generate, and run a single benchmark."
     echo "  build <platform>                    Build the benchmark executable."
-    echo "  generate <platform> <devices> <records> Generate test data for a specific size."
-    echo "  run <platform> <devices> <records>  Run a benchmark with pre-generated data."
-    echo "  loop-benchmark <platform>           Build once, then loop through generating and running"
-    echo "                                      benchmarks for all combinations in DEVICE_COUNTS"
-    echo "                                      and RECORD_COUNTS defined in the script."
-    echo "  clean [all]                         Remove build artifacts and data. Use 'all' to also remove results.csv."
+    echo "  generate <platform> <devices> <records> Generate test data."
+    echo "  run <platform> <devices> <records>  Run a benchmark."
+    echo "  loop-benchmark <platform>           Loop through benchmarks defined in the script."
+    echo "  clean [all]                         Remove build artifacts. 'all' also removes results."
     echo
     echo "Platforms:"
-    echo "  native, sgx, terse"
+    echo "  native, sgx, terse-native, terse-sgx, terse-hybrid"
     exit 1
 }
 
 build_native() {
     echo "Building native binary..."
-    GRAMINE_API_FLAGS=$(pkg-config --cflags --libs gramine-api 2>/dev/null || echo "")
-    g++ -std=c++17 -O3 -DNDEBUG -march=native -o "$PROGRAM_NAME" main.cpp -lssl -lcrypto $GRAMINE_API_FLAGS
+    g++ -std=c++17 -O3 -DNDEBUG -march=native -o "$PROGRAM_NAME" main.cpp -lssl -lcrypto
 }
 
 build_sgx() {
     echo "Building for SGX..."
-    build_native # SGX build requires the native binary first
-
-    if [ ! -f "$MANIFEST_TEMPLATE" ]; then
-        echo "Error: Manifest template '$MANIFEST_TEMPLATE' not found."
-        exit 1
-    fi
-
-    echo "Generating manifest..."
+    build_native
     gramine-manifest "$MANIFEST_TEMPLATE" "$MANIFEST"
-
-    echo "Signing enclave..."
     gramine-sgx-sign --manifest "$MANIFEST" --output "$MANIFEST_SGX"
 }
 
@@ -64,8 +52,8 @@ build_sgx() {
 do_build() {
     local platform=$1
     case $platform in
-        native) build_native ;;
-        sgx|terse) build_sgx ;;
+        native|terse-native) build_native ;;
+        sgx|terse-sgx|terse-hybrid) build_sgx ;;
         *) echo "Error: Invalid platform '$platform'." >&2; usage ;;
     esac
 }
@@ -74,16 +62,11 @@ do_generate() {
     local platform=$1
     local devices=$2
     local records=$3
-
-    if [ ! -f "$PROGRAM_NAME" ]; then
-        echo "Error: Executable not found. Please run 'build' first." >&2
-        exit 1
-    fi
+    if [ ! -f "$PROGRAM_NAME" ]; then echo "Error: Executable not found. Build first." >&2; exit 1; fi
     echo "--> Generating test data for $devices devices, $records records each..."
-    # Generation can always run natively
     case $platform in
         native|sgx) ./"$PROGRAM_NAME" generate "$devices" "$records" ;;
-        terse) ./"$PROGRAM_NAME" generate-terse "$devices" "$records" ;;
+        terse-native|terse-sgx|terse-hybrid) ./"$PROGRAM_NAME" generate-terse "$devices" "$records" ;;
         *) echo "Error: Invalid platform '$platform' for generate." >&2; usage ;;
     esac
 }
@@ -92,30 +75,48 @@ do_run() {
     local platform=$1
     local devices=$2
     local records=$3
-
-    if [ ! -f "$PROGRAM_NAME" ]; then
-        echo "Error: Executable not found. Please run 'build' first." >&2
-        exit 1
-    fi
-    if [[ "$platform" == "sgx" || "$platform" == "terse" ]] && [ ! -f "$MANIFEST_SGX" ]; then
-        echo "Error: Executable/manifest not found. Please run 'build' first." >&2
-        exit 1
-    fi
-
-    # Check for correct data files
-    if [[ "$platform" == "native" || "$platform" == "sgx" ]] && [[ ! -f "$DATA_FILE" || ! -f "$KEY_FILE" ]]; then
-        echo "Error: Data files not found. Please run 'generate $platform <dev> <rec>' first." >&2
-        exit 1
-    elif [[ "$platform" == "terse" ]] && [[ ! -f "$TERSE_DATA_FILE" ]]; then
-        echo "Error: Data file ($TERSE_DATA_FILE) not found. Please run 'generate $platform <dev> <rec>' first." >&2
-        exit 1
+    if [ ! -f "$PROGRAM_NAME" ]; then echo "Error: Executable not found. Build first." >&2; exit 1; fi
+    if [[ "$platform" == "sgx" || "$platform" == "terse-sgx" || "$platform" == "terse-hybrid" ]] && [ ! -f "$MANIFEST_SGX" ]; then
+        echo "Error: SGX manifest not found. Build first." >&2; exit 1;
     fi
 
     echo "--> Running benchmark for $devices devices, $records records each on platform: $platform"
     case $platform in
         native) ./"$PROGRAM_NAME" native "$devices" "$records" ;;
         sgx) gramine-sgx "$PROGRAM_NAME" sgx "$devices" "$records" ;;
-        terse) gramine-sgx "$PROGRAM_NAME" terse "$devices" "$records" ;;
+        terse-native) ./"$PROGRAM_NAME" terse-native "$devices" "$records" ;;
+        terse-sgx) gramine-sgx "$PROGRAM_NAME" terse-sgx "$devices" "$records" ;;
+        terse-hybrid)
+            echo "--- Measuring Part 1: Native Summation (Looped) ---"
+            NATIVE_OUTPUT=$(./"$PROGRAM_NAME" terse-hybrid-native-sum-looped "$devices" "$records")
+            NATIVE_TIME_US=$(echo "$NATIVE_OUTPUT" | grep 'duration_us:' | cut -d':' -f2)
+            if [ -z "$NATIVE_TIME_US" ]; then echo "Error: Failed to get native duration."; exit 1; fi
+            echo "Native part took: $NATIVE_TIME_US microseconds"
+
+            echo "--- Measuring Part 2: SGX Lookup (Looped) ---"
+            SGX_OUTPUT=$(gramine-sgx "$PROGRAM_NAME" terse-hybrid-sgx-lookup-looped "$devices" "$records")
+            SGX_TIME_US=$(echo "$SGX_OUTPUT" | grep 'duration_us:' | cut -d':' -f2)
+            if [ -z "$SGX_TIME_US" ]; then echo "Error: Failed to get SGX duration."; exit 1; fi
+            echo "SGX part took: $SGX_TIME_US microseconds"
+
+            TOTAL_TIME_US=$((NATIVE_TIME_US + SGX_TIME_US))
+            TOTAL_RECORDS=$((devices * records))
+
+            # Use bc for floating point calculations
+            OPS_PER_SEC=$(echo "scale=2; if ($TOTAL_TIME_US > 0) $TOTAL_RECORDS * 1000000 / $TOTAL_TIME_US else 0" | bc)
+            AVG_ROUND_TIME_US=$(echo "scale=2; if ($records > 0) $TOTAL_TIME_US / $records else 0" | bc)
+
+            echo "----------------------------------------"
+            echo "Total Time: $TOTAL_TIME_US microseconds"
+            echo "Average round time: $AVG_ROUND_TIME_US microseconds"
+            echo "Rate: $OPS_PER_SEC ops/sec"
+
+            if [ ! -f "$RESULTS_FILE" ]; then
+                echo "platform,num_devices,records_per_device,duration_us,ops_per_sec,avg_round_time_us" > "$RESULTS_FILE"
+            fi
+            echo "$platform,$devices,$records,$TOTAL_TIME_US,$OPS_PER_SEC,$AVG_ROUND_TIME_US" >> "$RESULTS_FILE"
+            echo "Results appended to $RESULTS_FILE"
+            ;;
         *) echo "Error: Invalid platform '$platform'." >&2; usage ;;
     esac
 }
@@ -123,12 +124,36 @@ do_run() {
 # --- Main Logic ---
 COMMAND=${1:-}
 PLATFORM=${2:-}
-
-if [ -z "$COMMAND" ]; then
-    usage
-fi
+if [ -z "$COMMAND" ]; then usage; fi
 
 case $COMMAND in
+    all)
+        if [ "$#" -ne 4 ]; then echo "Error: 'all' command requires <platform> <devices> <records>." >&2; usage; fi
+        do_build "$2"
+        do_generate "$2" "$3" "$4"
+        do_run "$2" "$3" "$4"
+        ;;
+    build)
+        if [ -z "$PLATFORM" ]; then echo "Error: 'build' command requires a platform." >&2; usage; fi
+        do_build "$PLATFORM"
+        ;;
+    generate)
+        if [ "$#" -ne 4 ]; then echo "Error: 'generate' command requires <platform> <devices> <records>." >&2; usage; fi
+        do_generate "$2" "$3" "$4"
+        ;;
+    run)
+        if [ "$#" -ne 4 ]; then echo "Error: 'run' command requires <platform> <devices> <records>." >&2; usage; fi
+        do_run "$2" "$3" "$4"
+        ;;
+    clean)
+        if [ "$2" == "all" ]; then
+            echo "Cleaning all artifacts, data, and results..."
+            rm -f "$PROGRAM_NAME" "$MANIFEST" "$MANIFEST_SGX" "$DATA_FILE" "$KEY_FILE" "$TERSE_DATA_FILE" "$RESULTS_FILE"
+        else
+            echo "Cleaning artifacts and data..."
+            rm -f "$PROGRAM_NAME" "$MANIFEST" "$MANIFEST_SGX" "$DATA_FILE" "$KEY_FILE" "$TERSE_DATA_FILE"
+        fi
+        ;;
     loop-benchmark)
         if [ -z "$PLATFORM" ]; then
             echo "Error: 'loop-benchmark' command requires a platform." >&2
@@ -153,55 +178,8 @@ case $COMMAND in
         echo "====================================================="
         echo "Full benchmark loop finished. Results are in $RESULTS_FILE"
         ;;
-
-    all)
-        if [ "$#" -ne 4 ]; then
-            echo "Error: 'all' command requires <platform> <devices> <records>." >&2
-            usage
-        fi
-        do_build "$2"
-        do_generate "$2" "$3" "$4"
-        do_run "$2" "$3" "$4"
-        ;;
-
-    build)
-        if [ -z "$PLATFORM" ]; then
-            echo "Error: 'build' command requires a platform." >&2
-            usage
-        fi
-        do_build "$PLATFORM"
-        ;;
-
-    generate)
-        if [ "$#" -ne 4 ]; then
-            echo "Error: 'generate' command requires <platform> <devices> <records>." >&2
-            usage
-        fi
-        do_generate "$2" "$3" "$4"
-        ;;
-
-    run)
-        if [ "$#" -ne 4 ]; then
-            echo "Error: 'run' command requires <platform> <devices> <records>." >&2
-            usage
-        fi
-        do_run "$2" "$3" "$4"
-        ;;
-
-    clean)
-        # ** MODIFIED CLEAN LOGIC **
-        if [ "$2" == "all" ]; then
-            echo "Cleaning up all artifacts, data, and results..."
-            rm -f "$PROGRAM_NAME" "$MANIFEST" "$MANIFEST_SGX" "$DATA_FILE" "$KEY_FILE" "$TERSE_DATA_FILE" "$RESULTS_FILE"
-        else
-            echo "Cleaning up artifacts and data (preserving $RESULTS_FILE)..."
-            rm -f "$PROGRAM_NAME" "$MANIFEST" "$MANIFEST_SGX" "$DATA_FILE" "$KEY_FILE" "$TERSE_DATA_FILE"
-        fi
-        ;;
-
     *)
-        echo "Error: Unknown command '$COMMAND'." >&2
-        usage
+        echo "Error: Unknown command '$COMMAND'." >&2; usage
         ;;
 esac
 

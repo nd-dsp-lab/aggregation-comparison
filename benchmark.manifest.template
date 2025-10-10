@@ -34,4 +34,5 @@ sgx.allowed_files = [
   "file:encrypted_keys.bin",
   "file:terse_data.bin",
   "file:results.csv",
+  "file:intermediate_sum.txt",
 ]
