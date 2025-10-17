@@ -1,4 +1,8 @@
+# Benchmark Results
+
 Measures average round aggregation time in μs over 1,000 rounds of aggregation.
+
+## Platform Descriptions
 
 - **Native:** AES decryption and summation of each cipher text run without SGX.
 
@@ -10,8 +14,14 @@ Measures average round aggregation time in μs over 1,000 rounds of aggregation.
 
 - **TERSE-Hybrid (ours):** Most summations run outside of SGX. Lookup and final addition run inside SGX.
 
-| Number of Devices | Native    | SGX       | Terse-Native | Terse-SGX | Terse-Hybrid |
+## Results
+
+| Number of Devices | Native    | SGX       | TERSE-Native | TERSE-SGX | TERSE-Hybrid |
 | ----------------- | --------- | --------- | ------------ | --------- | ------------ |
-| 1,000             | 630.07    | 578.57    | 1.04         | 25.27     | 1.90         |
-| 10,000            | 4,792.59  | 5,773.88  | 13.70        | 253.41    | 15.46        |
-| 100,000           | 47,380.04 | 57,990.95 | 194.53       | 1,985.00  | 144.76       |
+| 1,000             | 795.18    | 607.61    | 1.44         | 26.68     | 0.94         |
+| 10,000            | 5,002.92  | 5,675.67  | 20.11        | 233.49    | 76.09        |
+| 100,000           | 49,172.41 | 57,591.84 | 224.41       | 2,103.93  | 525.86       |
+
+## Notes
+
+- Results at 1,000 devices may exhibit timing artifacts due to measurement precision at microsecond scales. Focus on 10,000+ device results for reliable comparisons.
