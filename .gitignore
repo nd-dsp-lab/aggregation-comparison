@@ -1,15 +1,33 @@
-# Ignore build artifacts and executables
-benchmark
-benchmark.manifest
-benchmark.manifest.sgx
-benchmark.sig
+# Compiled executables
+aes_benchmark
+terse_benchmark
 
-# Ignore generated data files
-encrypted_data.bin
-encrypted_keys.bin
+# Gramine manifest files
+*.manifest
+*.manifest.sgx
+*.sig
+*.token
 
-# Ignore sensitive files
-enclave-key.pem
+# Data files
+*.bin
+*.csv
 
-# Ignore miscellaneous files
-*.txt
+# Build artifacts
+*.o
+*.a
+*.so
+*.dylib
+
+# Intermediate files
+intermediate.bin
+
+# Shared memory files (if persisted)
+/dev/shm/*
+
+# Editor/IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store

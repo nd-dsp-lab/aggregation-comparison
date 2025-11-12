@@ -1,17 +1,41 @@
-Measures average round aggregation time in μs over 1,000 rounds of aggregation.
+# Benchmark Results
 
-- **Native:** AES decryption and summation of each cipher text run without SGX.
+## AES Benchmark
 
-- **SGX:** AES decryption and summation of each cipher text run inside SGX.
+| benchmark | io_method | platform | num_devices | records_per_device | avg_read_us | avg_aggregation_us | avg_write_us | avg_total_us |
+|-----------|-----------|----------|-------------|-------------------|-------------|-------------------|--------------|--------------|
+| aes | file | native | 1000 | 1000 | 2004 | 603.457 | 0.001 | 603.458 |
+| aes | file | native | 10000 | 1000 | 1847 | 6495.9 | 0.001 | 6495.9 |
+| aes | file | native | 100000 | 1000 | 9323 | 72514.1 | 0.001 | 72514.1 |
+| aes | file | sgx | 1000 | 1000 | 3133 | 812.91 | 0.002 | 812.912 |
+| aes | file | sgx | 10000 | 1000 | 3169 | 6960.91 | 0.004 | 6960.92 |
+| aes | file | sgx | 100000 | 1000 | 10746 | 81087.1 | 0.003 | 81087.1 |
+| aes | shm | native | 1000 | 1000 | 1208 | 527.203 | 0.001 | 527.204 |
+| aes | shm | native | 10000 | 1000 | 3108 | 6322.06 | 0.001 | 6322.06 |
+| aes | shm | native | 100000 | 1000 | 9609 | 71435.6 | 0.001 | 71435.6 |
+| aes | shm | sgx | 1000 | 1000 | 88 | 597.647 | 0.003 | 597.65 |
+| aes | shm | sgx | 10000 | 1000 | 948 | 6959.18 | 0.002 | 6959.18 |
+| aes | shm | sgx | 100000 | 1000 | 10916 | 69414.9 | 0.002 | 69414.9 |
 
-- **TERSE-Native:** TERSE run entirely without SGX.
+## Terse Benchmark
 
-- **TERSE-SGX:** TERSE run entirely in SGX.
-
-- **TERSE-Hybrid (ours):** Most summations run outside of SGX. Lookup and final addition run inside SGX.
-
-| Number of Devices | Native    | SGX       | Terse-Native | Terse-SGX | Terse-Hybrid |
-| ----------------- | --------- | --------- | ------------ | --------- | ------------ |
-| 1,000             | 630.07    | 578.57    | 1.04         | 25.27     | 1.90         |
-| 10,000            | 4,792.59  | 5,773.88  | 13.70        | 253.41    | 15.46        |
-| 100,000           | 47,380.04 | 57,990.95 | 194.53       | 1,985.00  | 144.76       |
+| benchmark | io_method | platform | num_devices | records_per_device | avg_read_us | avg_sum_us | avg_lookup_us | avg_total_us |
+|-----------|-----------|----------|-------------|-------------------|-------------|-----------|---------------|--------------|
+| terse | file | native | 1000 | 1000 | 0 | 1.013 | 0.005 | 1.018 |
+| terse | file | native | 10000 | 1000 | 0.001 | 74.834 | 0.014 | 74.849 |
+| terse | file | native | 100000 | 1000 | 0 | 523.705 | 0.008 | 523.713 |
+| terse | file | sgx | 1000 | 1000 | 0 | 0.698 | 0.003 | 0.703 |
+| terse | file | sgx | 10000 | 1000 | 0 | 86.341 | 0.005 | 90.179 |
+| terse | file | sgx | 100000 | 1000 | 0.001 | 994.207 | 0.009 | 999.002 |
+| terse | file | hybrid | 1000 | 1000 | 0.1120 | 1.0330 | 0.0020 | 1.1470 |
+| terse | file | hybrid | 10000 | 1000 | 0.1400 | 73.3250 | 0.0030 | 73.4680 |
+| terse | file | hybrid | 100000 | 1000 | 0.1570 | 518.0290 | 0.0020 | 518.1880 |
+| terse | shm | native | 1000 | 1000 | 0 | 0.991 | 0.007 | 0.999 |
+| terse | shm | native | 10000 | 1000 | 0 | 73.373 | 0.009 | 73.384 |
+| terse | shm | native | 100000 | 1000 | 0.001 | 524.911 | 0.009 | 524.921 |
+| terse | shm | sgx | 1000 | 1000 | 0 | 12.318 | 0.008 | 12.328 |
+| terse | shm | sgx | 10000 | 1000 | 0 | 137.341 | 0.009 | 137.608 |
+| terse | shm | sgx | 100000 | 1000 | 0.001 | 1516.08 | 0.009 | 1520.44 |
+| terse | shm | hybrid | 1000 | 1000 | 0.1170 | 1.2740 | 0.0120 | 1.4030 |
+| terse | shm | hybrid | 10000 | 1000 | 0.0980 | 74.3550 | 0.0130 | 74.4660 |
+| terse | shm | hybrid | 100000 | 1000 | 0.1120 | 511.2720 | 0.0130 | 511.3970 |

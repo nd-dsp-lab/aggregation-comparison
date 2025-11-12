@@ -1,0 +1,37 @@
+libos.entrypoint = "terse_benchmark"
+
+loader.insecure__use_cmdline_argv = true
+loader.env.LD_LIBRARY_PATH = "/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu"
+
+fs.mounts = [
+  { path = "/lib", uri = "file:/lib" },
+  { path = "/usr/lib", uri = "file:/usr/lib" },
+  { path = "/etc", uri = "file:/etc" },
+  { type = "untrusted_shm", path = "/dev/shm", uri = "dev:/dev/shm" },
+]
+
+sgx.debug = true
+sgx.enclave_size = "8G"
+sgx.max_threads = 4
+sgx.remote_attestation = "none"
+sgx.preheat_enclave = true
+sgx.insecure__rpc_thread_num = 4
+
+libos.check_invalid_pointers = false
+
+sgx.trusted_files = [
+  "file:{{ gramine.libos }}",
+  "file:terse_benchmark",
+  "file:{{ gramine.runtimedir() }}/",
+  "file:/lib/x86_64-linux-gnu/",
+  "file:/usr/lib/x86_64-linux-gnu/",
+]
+
+sgx.allowed_files = [
+  "file:terse_data.bin",
+  "file:terse_output.bin",
+  "file:terse_results.csv",
+  "file:terse_hybrid_breakdown.csv",
+  "file:/dev/shm/terse_intermediate_shm",
+  "file:/dev/shm/terse_input_shm",
+]
