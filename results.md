@@ -1,6 +1,27 @@
 # Benchmark Results
 
+## Overview
+
+Performance comparison of AES encryption and basic aggregation workloads across different execution environments and I/O methods. All measurements are in microseconds (μs) averaged per round over 1000 rounds.
+
+**Platforms:**
+- `native`: Standard Linux execution
+- `sgx`: Intel SGX enclave via Gramine
+- `hybrid`: Split execution (native aggregation + SGX lookup)
+
+**I/O Methods:**
+- `file`: Reading data from disk files
+- `shm`: Reading from shared memory (untrusted memory region for SGX)
+
+**Phases:**
+- `avg_read_us`: One-time setup cost (loading keys/data)
+- `avg_aggregation_us` / `avg_sum_us`: Decryption and summation per round
+- `avg_write_us` / `avg_lookup_us`: Final aggregation or lookup table operations
+- `avg_total_us`: Total time per round
+
 ## AES Benchmark
+
+Encrypted data processing with per-device AES-128-CBC decryption and aggregation.
 
 | benchmark | io_method | platform | num_devices | records_per_device | avg_read_us | avg_aggregation_us | avg_write_us | avg_total_us |
 |-----------|-----------|----------|-------------|-------------------|-------------|-------------------|--------------|--------------|
@@ -18,6 +39,8 @@
 | aes | shm | sgx | 100000 | 1000 | 10916 | 69414.9 | 0.002 | 69414.9 |
 
 ## Terse Benchmark
+
+Simple summation with lookup table operations (minimal encryption overhead).
 
 | benchmark | io_method | platform | num_devices | records_per_device | avg_read_us | avg_sum_us | avg_lookup_us | avg_total_us |
 |-----------|-----------|----------|-------------|-------------------|-------------|-----------|---------------|--------------|
