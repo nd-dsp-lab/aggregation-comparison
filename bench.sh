@@ -3,8 +3,8 @@
 set -e
 
 # Configuration
-DEVICE_COUNTS=(1000 10000 100000)
-RECORD_COUNTS=(1000)
+DEVICE_COUNTS=(10000 1000000)
+RECORD_COUNTS=(50)
 
 BENCHMARKS=(
     "aes:aes:native,sgx"
