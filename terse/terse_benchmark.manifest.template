@@ -10,7 +10,7 @@ fs.mounts = [
 ]
 
 sgx.debug = true
-sgx.enclave_size = "8G"
+sgx.enclave_size = "128G"
 sgx.max_threads = 4
 sgx.remote_attestation = "none"
 sgx.preheat_enclave = true
@@ -27,9 +27,5 @@ sgx.trusted_files = [
 ]
 
 sgx.allowed_files = [
-  "file:terse_data.bin",
-  "file:intermediate.bin",
-  "file:terse_output.bin",
   "file:terse_results.csv",
-  "file:terse_hybrid_breakdown.csv",
 ]

@@ -1,4 +1,4 @@
-libos.entrypoint = "aes_benchmark"
+libos.entrypoint = "ecc_benchmark"
 
 loader.insecure__use_cmdline_argv = true
 loader.env.LD_LIBRARY_PATH = "/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu"
@@ -20,12 +20,12 @@ libos.check_invalid_pointers = false
 
 sgx.trusted_files = [
   "file:{{ gramine.libos }}",
-  "file:aes_benchmark",
+  "file:ecc_benchmark",
   "file:{{ gramine.runtimedir() }}/",
   "file:/lib/x86_64-linux-gnu/",
   "file:/usr/lib/x86_64-linux-gnu/",
 ]
 
 sgx.allowed_files = [
-  "file:aes_results.csv",
+  "file:ecc_results.csv",
 ]

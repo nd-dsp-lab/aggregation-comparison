@@ -1,16 +1,14 @@
 #!/bin/bash
-
 set -e
 
-# Configuration
-DEVICE_COUNTS=(10000 1000000)
-RECORD_COUNTS=(50)
+DEVICE_COUNTS=(100000 1000000 10000000)
+RECORD_COUNTS=(15)
 
 BENCHMARKS=(
     "aes:aes:native,sgx"
-    "aes-shm:aes:native,sgx"
-    "terse:terse:native,sgx,hybrid"
-    "terse-shm:terse:native,sgx,hybrid"
+    "terse:terse:native,sgx_only,hybrid"
+    "rsa:rsa:native,sgx"
+    "ecc:ecc:native,sgx"
 )
 
 usage() {
@@ -18,17 +16,16 @@ usage() {
     echo
     echo "Commands:"
     echo "  build <benchmark> <platform>           Build a specific benchmark"
-    echo "  generate <benchmark> <devices> <recs>  Generate test data"
     echo "  run <benchmark> <platform> <dev> <rec> Run a single benchmark"
     echo "  loop <benchmark> <platform>            Loop through all configs"
     echo "  loop-all <benchmark>                   Loop all platforms for benchmark"
     echo "  loop-everything                        Run all benchmarks, all platforms"
+    echo "  aggregate                              Aggregate all results into one CSV"
     echo "  clean <benchmark> [all]                Clean artifacts"
     echo "  clean-all [all]                        Clean all benchmarks"
-    echo "  aggregate                              Combine all results into one CSV"
     echo
-    echo "Benchmarks: aes, aes-shm, terse, terse-shm"
-    echo "Platforms: native, sgx, hybrid (terse only)"
+    echo "Benchmarks: aes, terse, rsa, ecc"
+    echo "Platforms: native, sgx, sgx_only (terse), hybrid (terse)"
     exit 1
 }
 
@@ -63,14 +60,14 @@ build_benchmark() {
 
     case $platform in
         native)
-            if [ "$prefix" == "aes" ]; then
+            if [ "$prefix" == "aes" ] || [ "$prefix" == "rsa" ] || [ "$prefix" == "ecc" ]; then
                 g++ -std=c++17 -O3 -DNDEBUG -march=native -o "$program" "${prefix}_benchmark.cpp" -lssl -lcrypto
             else
                 g++ -std=c++17 -O3 -DNDEBUG -march=native -o "$program" "${prefix}_benchmark.cpp"
             fi
             ;;
-        sgx|hybrid)
-            if [ "$prefix" == "aes" ]; then
+        sgx|sgx_only|hybrid)
+            if [ "$prefix" == "aes" ] || [ "$prefix" == "rsa" ] || [ "$prefix" == "ecc" ]; then
                 g++ -std=c++17 -O3 -DNDEBUG -march=native -o "$program" "${prefix}_benchmark.cpp" -lssl -lcrypto
             else
                 g++ -std=c++17 -O3 -DNDEBUG -march=native -o "$program" "${prefix}_benchmark.cpp"
@@ -87,30 +84,6 @@ build_benchmark() {
 
     cd ..
     echo "Build complete: $bench ($platform)"
-}
-
-generate_data() {
-    local bench=$1
-    local devices=$2
-    local records=$3
-
-    local info=$(get_benchmark_info "$bench")
-    IFS=':' read -r dir prefix platforms <<< "$info"
-
-    cd "$dir"
-
-    local program="${prefix}_benchmark"
-
-    if [ ! -f "$program" ]; then
-        echo "Error: Executable not found. Build first." >&2
-        cd ..
-        exit 1
-    fi
-
-    echo "Generating data for $bench: $devices devices, $records records..."
-    ./"$program" generate "$devices" "$records"
-
-    cd ..
 }
 
 run_single() {
@@ -133,7 +106,7 @@ run_single() {
         exit 1
     fi
 
-    if [[ "$platform" == "sgx" || "$platform" == "hybrid" ]] && [ ! -f "$manifest_sgx" ]; then
+    if [[ "$platform" == "sgx" || "$platform" == "sgx_only" || "$platform" == "hybrid" ]] && [ ! -f "$manifest_sgx" ]; then
         echo "Error: SGX manifest not found. Build first." >&2
         cd ..
         exit 1
@@ -147,6 +120,9 @@ run_single() {
             ;;
         sgx)
             gramine-sgx "$program" sgx "$devices" "$records"
+            ;;
+        sgx_only)
+            gramine-sgx "$program" sgx_only "$devices" "$records"
             ;;
         hybrid)
             if [ "$prefix" != "terse" ]; then
@@ -177,40 +153,30 @@ run_hybrid() {
     native_output=$(./"$program" hybrid_native "$devices" "$records" 2>&1)
     echo "$native_output"
 
-    native_read_time=$(echo "$native_output" | grep "Read:" | awk '{print $2}')
     native_sum_time=$(echo "$native_output" | grep "Sum:" | awk '{print $2}')
 
     echo "Step 2: Running SGX lookup..."
     sgx_output=$(gramine-sgx "$program" hybrid_sgx "$devices" "$records" 2>&1)
     echo "$sgx_output"
 
-    sgx_read_time=$(echo "$sgx_output" | grep "Read:" | awk '{print $2}')
     sgx_lookup_time=$(echo "$sgx_output" | grep "Lookup:" | awk '{print $2}')
 
-    total_read=$(echo "scale=4; $native_read_time + $sgx_read_time" | bc)
     total_sum=$native_sum_time
     total_lookup=$sgx_lookup_time
-    total_time=$(echo "scale=4; $total_read + $total_sum + $total_lookup" | bc)
+    total_time=$(echo "scale=4; $total_sum + $total_lookup" | bc)
 
     echo ""
     echo "--- Hybrid Summary (avg per round) ---"
-    echo "Read:   $total_read us"
     echo "Sum:    $total_sum us"
     echo "Lookup: $total_lookup us"
     echo "Total:  $total_time us"
 
     local results_file="terse_results.csv"
-    local breakdown_file="terse_hybrid_breakdown.csv"
 
     if [ ! -f "$results_file" ]; then
-        echo "platform,num_devices,records_per_device,avg_read_per_round_us,avg_sum_per_round_us,avg_lookup_per_round_us,avg_total_per_round_us" > "$results_file"
+        echo "platform,num_devices,records_per_device,avg_sum_per_round_us,avg_lookup_per_round_us,avg_total_per_round_us" > "$results_file"
     fi
-    echo "hybrid,$devices,$records,$total_read,$total_sum,$total_lookup,$total_time" >> "$results_file"
-
-    if [ ! -f "$breakdown_file" ]; then
-        echo "num_devices,records_per_device,native_read_us,native_sum_us,sgx_read_us,sgx_lookup_us,total_us" > "$breakdown_file"
-    fi
-    echo "$devices,$records,$native_read_time,$native_sum_time,$sgx_read_time,$sgx_lookup_time,$total_time" >> "$breakdown_file"
+    echo "hybrid,$devices,$records,$total_sum,$total_lookup,$total_time" >> "$results_file"
 }
 
 loop_benchmark() {
@@ -230,7 +196,6 @@ loop_benchmark() {
         for records in "${RECORD_COUNTS[@]}"; do
             echo
             echo "--- Config: $devices devices, $records records/device ---"
-            generate_data "$bench" "$devices" "$records"
             run_single "$bench" "$platform" "$devices" "$records"
             echo "-------------------------------------------------------------"
         done
@@ -290,54 +255,44 @@ loop_everything() {
     for entry in "${BENCHMARKS[@]}"; do
         IFS=':' read -r dir prefix platforms <<< "$entry"
         echo "  - $dir/${prefix}_results.csv"
-        if [[ "$platforms" == *"hybrid"* ]]; then
-            echo "  - $dir/${prefix}_hybrid_breakdown.csv"
-        fi
     done
 }
 
 aggregate_results() {
-    echo "Creating separate aggregated results..."
+    local output_file="aggregated_results.csv"
 
-    # AES results
-    local aes_file="all_aes_results.csv"
-    echo "benchmark,io_method,platform,num_devices,records_per_device,avg_read_us,avg_aggregation_us,avg_write_us,avg_total_us" > "$aes_file"
+    echo "Aggregating results into $output_file..."
 
-    for dir in aes aes-shm; do
-        # Results file is always named with base prefix (aes_results.csv in both dirs)
-        results_file="$dir/aes_results.csv"
+    # Create header
+    echo "benchmark,platform,num_devices,records_per_device,setup_us,avg_decrypt_sum_per_round_us,avg_final_per_round_us,avg_total_per_round_us" > "$output_file"
+
+    # Process each benchmark
+    for entry in "${BENCHMARKS[@]}"; do
+        IFS=':' read -r dir prefix platforms <<< "$entry"
+        local results_file="$dir/${prefix}_results.csv"
 
         if [ -f "$results_file" ]; then
-            echo "  Adding $results_file to $aes_file..."
-            io_method=$([ "$dir" == "aes-shm" ] && echo "shm" || echo "file")
-            tail -n +2 "$results_file" | sed "s/^/aes,$io_method,/" >> "$aes_file"
+            if [ "$prefix" == "terse" ]; then
+                # Terse has different format: platform,devices,records,sum,lookup,total
+                # Map to: benchmark,platform,devices,records,0,sum,lookup,total
+                tail -n +2 "$results_file" | while IFS=, read -r platform devices records sum lookup total; do
+                    echo "$prefix,$platform,$devices,$records,0,$sum,$lookup,$total" >> "$output_file"
+                done
+            else
+                # Crypto benchmarks: platform,devices,records,setup,decrypt,final,total
+                tail -n +2 "$results_file" | while IFS=, read -r platform devices records setup decrypt final total; do
+                    echo "$prefix,$platform,$devices,$records,$setup,$decrypt,$final,$total" >> "$output_file"
+                done
+            fi
         else
-            echo "  Warning: $results_file not found"
+            echo "Warning: $results_file not found, skipping..."
         fi
     done
 
-    # Terse results
-    local terse_file="all_terse_results.csv"
-    echo "benchmark,io_method,platform,num_devices,records_per_device,avg_read_us,avg_sum_us,avg_lookup_us,avg_total_us" > "$terse_file"
-
-    for dir in terse terse-shm; do
-        # Results file is always named with base prefix (terse_results.csv in both dirs)
-        results_file="$dir/terse_results.csv"
-
-        if [ -f "$results_file" ]; then
-            echo "  Adding $results_file to $terse_file..."
-            io_method=$([ "$dir" == "terse-shm" ] && echo "shm" || echo "file")
-            tail -n +2 "$results_file" | sed "s/^/terse,$io_method,/" >> "$terse_file"
-        else
-            echo "  Warning: $results_file not found"
-        fi
-    done
-
-    echo ""
-    echo "Aggregation complete:"
-    echo "  AES:   $aes_file ($(tail -n +2 "$aes_file" | wc -l) rows)"
-    echo "  Terse: $terse_file ($(tail -n +2 "$terse_file" | wc -l) rows)"
+    echo "Aggregation complete: $output_file"
+    echo "Total rows: $(tail -n +2 "$output_file" | wc -l)"
 }
+
 
 clean_benchmark() {
     local bench=$1
@@ -355,11 +310,10 @@ clean_benchmark() {
     if [ "$clean_all" == "all" ]; then
         echo "Cleaning all artifacts and results for $bench..."
         rm -f "$program" "$manifest" "$manifest_sgx"
-        rm -f "${prefix}"*.bin "${prefix}"*.csv intermediate.bin
+        rm -f "${prefix}"*.csv
     else
         echo "Cleaning build artifacts for $bench..."
         rm -f "$program" "$manifest" "$manifest_sgx"
-        rm -f "${prefix}"*.bin intermediate.bin
     fi
 
     cd ..
@@ -376,7 +330,6 @@ clean_all_benchmarks() {
     echo "Clean complete."
 }
 
-# Main command dispatcher
 COMMAND=${1:-}
 if [ -z "$COMMAND" ]; then usage; fi
 
@@ -387,13 +340,6 @@ case $COMMAND in
             usage
         fi
         build_benchmark "$2" "$3"
-        ;;
-    generate)
-        if [ "$#" -ne 4 ]; then
-            echo "Error: 'generate' requires <benchmark> <devices> <records>" >&2
-            usage
-        fi
-        generate_data "$2" "$3" "$4"
         ;;
     run)
         if [ "$#" -ne 5 ]; then
@@ -419,6 +365,9 @@ case $COMMAND in
     loop-everything)
         loop_everything
         ;;
+    aggregate)
+        aggregate_results
+        ;;
     clean)
         if [ "$#" -lt 2 ]; then
             echo "Error: 'clean' requires <benchmark>" >&2
@@ -428,9 +377,6 @@ case $COMMAND in
         ;;
     clean-all)
         clean_all_benchmarks "${2:-}"
-        ;;
-    aggregate)
-        aggregate_results
         ;;
     *)
         echo "Error: Unknown command '$COMMAND'" >&2

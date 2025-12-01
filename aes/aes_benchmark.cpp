@@ -3,7 +3,6 @@
 #endif
 
 #include <iostream>
-#include <fstream>
 #include <vector>
 #include <unordered_map>
 #include <chrono>
@@ -17,6 +16,7 @@
 #include <iomanip>
 #include <cstdlib>
 #include <algorithm>
+#include <fstream>
 
 struct EncryptedData {
     uint32_t device_id;
@@ -129,29 +129,30 @@ public:
     }
 };
 
-void generate_test_data(const std::string& data_filename, const std::string& key_filename, uint64_t num_devices, uint64_t records_per_device, const uint8_t* master_key) {
-    std::ofstream data_file(data_filename, std::ios::binary);
+void generate_test_data(SharedMemory& mem, uint64_t num_devices, uint64_t records_per_device, const uint8_t* master_key) {
     std::random_device rd;
     std::mt19937 gen(rd());
     std::uniform_int_distribution<uint64_t> value_dist(1, 1000000);
+
     std::vector<std::vector<uint8_t>> device_keys(num_devices, std::vector<uint8_t>(16));
     for (uint64_t i = 0; i < num_devices; ++i) {
         RAND_bytes(device_keys[i].data(), 16);
     }
+
     std::vector<uint8_t> key_data(sizeof(uint32_t) + num_devices * 16);
     uint32_t num_keys = static_cast<uint32_t>(num_devices);
     memcpy(key_data.data(), &num_keys, sizeof(uint32_t));
     for (uint64_t i = 0; i < num_devices; ++i) {
         memcpy(key_data.data() + sizeof(uint32_t) + i * 16, device_keys[i].data(), 16);
     }
-    auto encrypted_keys = encrypt_with_gcm(key_data, master_key);
-    std::ofstream key_file(key_filename, std::ios::binary);
-    key_file.write(reinterpret_cast<const char*>(encrypted_keys.data()), encrypted_keys.size());
+    mem.encrypted_keys = encrypt_with_gcm(key_data, master_key);
+
     uint64_t total_records = num_devices * records_per_device;
-    data_file.write(reinterpret_cast<const char*>(&total_records), sizeof(total_records));
+    mem.all_data.resize(total_records);
+
     for (uint64_t device = 0; device < num_devices; ++device) {
         for (uint64_t record = 0; record < records_per_device; ++record) {
-            EncryptedData data;
+            EncryptedData& data = mem.all_data[device * records_per_device + record];
             data.device_id = static_cast<uint32_t>(device);
             RAND_bytes(data.iv, 16);
             uint8_t plaintext[16] = {0};
@@ -174,32 +175,8 @@ void generate_test_data(const std::string& data_filename, const std::string& key
                 throw std::runtime_error("Failed to finalize encryption");
             }
             EVP_CIPHER_CTX_free(ctx);
-            data_file.write(reinterpret_cast<const char*>(&data), sizeof(data));
         }
     }
-}
-
-void initialize_shared_memory(SharedMemory& mem, const std::string& data_filename, const std::string& key_filename, uint64_t num_devices, uint64_t records_per_device) {
-    std::ifstream key_ifile(key_filename, std::ios::binary);
-    if (!key_ifile) throw std::runtime_error("Key file not found. Run 'generate' first.");
-    key_ifile.seekg(0, std::ios::end);
-    size_t key_file_size = key_ifile.tellg();
-    key_ifile.seekg(0, std::ios::beg);
-    mem.encrypted_keys.resize(key_file_size);
-    key_ifile.read(reinterpret_cast<char*>(mem.encrypted_keys.data()), key_file_size);
-    key_ifile.close();
-
-    std::ifstream data_ifile(data_filename, std::ios::binary);
-    if (!data_ifile) throw std::runtime_error("Data file not found. Run 'generate' first.");
-    uint64_t file_total_records;
-    data_ifile.read(reinterpret_cast<char*>(&file_total_records), sizeof(file_total_records));
-    const uint64_t total_records = num_devices * records_per_device;
-    if (file_total_records != total_records) {
-        throw std::runtime_error("Mismatched record count in data file.");
-    }
-    mem.all_data.resize(total_records);
-    data_ifile.read(reinterpret_cast<char*>(mem.all_data.data()), total_records * sizeof(EncryptedData));
-    data_ifile.close();
 
     mem.round_sums.reserve(records_per_device);
 }
@@ -218,7 +195,6 @@ long long get_time_us() {
 void run_benchmark(const std::string& platform, SharedMemory& mem, uint64_t num_devices, 
                    uint64_t records_per_device, const uint8_t* master_key) {
 
-    // ============ SETUP PHASE (ONE-TIME, REPORTED SEPARATELY) ============
     long long setup_start_us = get_time_us();
 
     std::vector<uint8_t> decrypted_key_data = decrypt_with_gcm(mem.encrypted_keys, master_key);
@@ -234,7 +210,6 @@ void run_benchmark(const std::string& platform, SharedMemory& mem, uint64_t num_
 
     long long setup_time_us = get_time_us() - setup_start_us;
 
-    // ============ PREPARE ACCESS PATTERN ============
     const uint64_t total_records = num_devices * records_per_device;
     std::vector<size_t> access_order(total_records);
     for (size_t i = 0; i < total_records; ++i) access_order[i] = i;
@@ -242,7 +217,6 @@ void run_benchmark(const std::string& platform, SharedMemory& mem, uint64_t num_
     std::mt19937 g(rd());
     std::shuffle(access_order.begin(), access_order.end(), g);
 
-    // ============ BENCHMARK PHASE (PER-ROUND TIMING) ============
     long long benchmark_start_us = get_time_us();
 
     for (uint64_t round = 0; round < records_per_device; ++round) {
@@ -259,7 +233,6 @@ void run_benchmark(const std::string& platform, SharedMemory& mem, uint64_t num_
 
     long long benchmark_time_us = get_time_us() - benchmark_start_us;
 
-    // ============ FINAL AGGREGATION ============
     long long final_start_us = get_time_us();
     volatile uint64_t total_sum = 0;
     for (uint64_t sum : mem.round_sums) {
@@ -267,13 +240,11 @@ void run_benchmark(const std::string& platform, SharedMemory& mem, uint64_t num_
     }
     long long final_time_us = get_time_us() - final_start_us;
 
-    // ============ COMPUTE METRICS ============
     double avg_per_round_us = (records_per_device > 0) ? 
         (double)benchmark_time_us / records_per_device : 0.0;
     double avg_final_us = (records_per_device > 0) ? 
         (double)final_time_us / records_per_device : 0.0;
 
-    // ============ REPORT RESULTS ============
     std::cout << std::fixed << std::setprecision(4);
     std::cout << "Total sum: " << total_sum << std::endl;
     std::cout << "\nSetup (one-time):" << std::endl;
@@ -283,7 +254,6 @@ void run_benchmark(const std::string& platform, SharedMemory& mem, uint64_t num_
     std::cout << "  Final agg:   " << avg_final_us << " us" << std::endl;
     std::cout << "  Total:       " << (avg_per_round_us + avg_final_us) << " us" << std::endl;
 
-    // ============ SAVE TO CSV ============
     const std::string results_filename = "aes_results.csv";
     std::ofstream results_file;
     std::ifstream check_file(results_filename);
@@ -301,7 +271,6 @@ void run_benchmark(const std::string& platform, SharedMemory& mem, uint64_t num_
                  << avg_final_us << "," << (avg_per_round_us + avg_final_us) << "\n";
     results_file.close();
 }
-
 
 int main(int argc, char* argv[]) {
     setenv("MALLOC_ARENA_MAX", "1", 1);
@@ -324,26 +293,19 @@ int main(int argc, char* argv[]) {
 
     uint64_t num_devices = std::stoull(argv[2]);
     uint64_t records_per_device = std::stoull(argv[3]);
-
-    const std::string data_filename = "aes_encrypted_data.bin";
-    const std::string key_filename = "aes_encrypted_keys.bin";
     uint8_t master_key[32] = {0};
+
+    SharedMemory mem;
 
     if (command == "generate") {
         std::cout << "Generating test data..." << std::endl;
-        generate_test_data(data_filename, key_filename, num_devices, records_per_device, master_key);
+        generate_test_data(mem, num_devices, records_per_device, master_key);
         std::cout << "Data generation complete." << std::endl;
         return 0;
     }
 
-    std::cout << "Initializing shared memory..." << std::endl;
-    SharedMemory mem;
-    try {
-        initialize_shared_memory(mem, data_filename, key_filename, num_devices, records_per_device);
-    } catch (const std::exception& e) {
-        std::cerr << "Error initializing memory: " << e.what() << std::endl;
-        return 1;
-    }
+    std::cout << "Generating and loading data into memory..." << std::endl;
+    generate_test_data(mem, num_devices, records_per_device, master_key);
     std::cout << "Memory initialized. Starting benchmark..." << std::endl;
 
     run_benchmark(command, mem, num_devices, records_per_device, master_key);
