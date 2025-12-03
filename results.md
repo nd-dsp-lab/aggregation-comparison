@@ -1,3 +1,5 @@
+Here's the updated README with the new RSA results formatted to match the existing style:
+
 # Benchmark Results
 
 ## Overview
@@ -42,16 +44,16 @@ Elliptic Curve Cryptography (ECIES) with P-256 curve encryption/decryption.
 
 ## RSA Benchmark
 
-RSA-2048 encryption with OAEP padding.
+RSA-3072 encryption with OAEP padding. (Only 3 rounds)
 
 | Platform | Num Devices | Setup (μs) | Avg Decrypt+Sum (μs) | Avg Final (μs) | Avg Total (μs) |
 |----------|-------------|------------|---------------------|----------------|----------------|
-| native | 100,000 | 0 | 26,058,200 | 0 | 26,058,200 |
-| native | 1,000,000 | 1 | 259,903,000 | 0 | 259,903,000 |
-| native | 10,000,000 | 0 | 2,599,660,000 | 0 | 2,599,660,000 |
-| sgx | 100,000 | 0 | 26,844,800 | 0.067 | 26,844,800 |
-| sgx | 1,000,000 | 1 | 271,563,000 | 0 | 271,563,000 |
-| sgx | 10,000,000 | 1 | 2,705,040,000 | 0 | 2,705,040,000 |
+| native | 100,000 | 0 | 68,852,000 | 0 | 68,852,000 |
+| native | 1,000,000 | 0 | 688,378,000 | 0 | 688,378,000 |
+| native | 10,000,000 | 1 | 6,880,870,000 | 0 | 6,880,870,000 |
+| sgx | 100,000 | 0 | 70,405,300 | 0 | 70,405,300 |
+| sgx | 1,000,000 | 0 | 703,962,000 | 0 | 703,962,000 |
+| sgx | 10,000,000 | 0 | 7,038,560,000 | 0 | 7,038,560,000 |
 
 ## TERSE Benchmark
 

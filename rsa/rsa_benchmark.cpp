@@ -40,7 +40,7 @@ EVP_PKEY* generate_rsa_keypair() {
         throw std::runtime_error("Failed to init keygen");
     }
 
-    if (EVP_PKEY_CTX_set_rsa_keygen_bits(ctx, 2048) <= 0) {
+    if (EVP_PKEY_CTX_set_rsa_keygen_bits(ctx, 3072) <= 0) {
         EVP_PKEY_CTX_free(ctx);
         throw std::runtime_error("Failed to set key bits");
     }
