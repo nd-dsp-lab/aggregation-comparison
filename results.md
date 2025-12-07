@@ -1,5 +1,3 @@
-Here's the updated README with the new RSA results formatted to match the existing style:
-
 # Benchmark Results
 
 ## Overview
@@ -12,7 +10,7 @@ Performance comparison of secure aggregation protocols in native and SGX. All me
 - `hybrid`: Split execution - native aggregation + SGX lookup (TERSE)
 
 **Test Configuration:**
-- Records per Device: **15** (all tests)
+- Records per Device: 15 (except RSA tests)
 - Device Counts: 100,000 / 1,000,000 / 10,000,000
 
 ## AES Benchmark
@@ -57,16 +55,19 @@ RSA-3072 encryption with OAEP padding. (Only 3 rounds)
 
 ## TERSE Benchmark
 
-TERSE summation with lookup table operation (non-cryptographic baseline).
+TERSE summation with lookup table.
 
 | Platform | Num Devices | Avg Sum (μs) | Avg Lookup (μs) | Avg Total (μs) |
 |----------|-------------|--------------|-----------------|----------------|
-| native | 100,000 | 396.3 | 0.067 | 396.4 |
-| native | 1,000,000 | 4,155.6 | 0 | 4,155.6 |
-| native | 10,000,000 | 45,083.6 | 0.067 | 45,083.7 |
-| sgx_only | 100,000 | 252.7 | 0.067 | 252.9 |
-| sgx_only | 1,000,000 | 4,955.3 | 0 | 5,186.5 |
-| sgx_only | 10,000,000 | 49,085.9 | 0.067 | 49,570.9 |
-| hybrid | 100,000 | 227.0 | 0 | 227.0 |
-| hybrid | 1,000,000 | 5,609.2 | 0 | 5,609.2 |
-| hybrid | 10,000,000 | 45,335.1 | 0.067 | 45,335.2 |
+| native | 100,000 | 539.7 | 0.067 | 539.7 |
+| native | 1,000,000 | 6,217.2 | 0 | 6,217.2 |
+| native | 10,000,000 | 51,063.6 | 0.067 | 51,063.7 |
+| native | 100,000,000 | 469,355 | 0.067 | 469,355 |
+| sgx_only | 100,000 | 238.1 | 0 | 238.2 |
+| sgx_only | 1,000,000 | 4,337.6 | 0.067 | 4,343.2 |
+| sgx_only | 10,000,000 | 50,062.1 | 0.067 | 50,923.5 |
+| sgx_only | 100,000,000 | 553,761 | 0.2 | 554,880 |
+| hybrid | 100,000 | 397.3 | 0 | 397.3 |
+| hybrid | 1,000,000 | 5,188.3 | 0 | 5,188.3 |
+| hybrid | 10,000,000 | 46,926.0 | 0 | 46,926.0 |
+| hybrid | 100,000,000 | 467,504.3 | 0.067 | 467,504.3 |
