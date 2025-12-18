@@ -1,12 +1,12 @@
 #!/bin/bash
 set -e
 
-DEVICE_COUNTS=(100000 1000000 10000000 100000000)
+DEVICE_COUNTS=(10000 100000 1000000)
 RECORD_COUNTS=(15)
 
 BENCHMARKS=(
     "aes:aes:native,sgx"
-    "terse:terse:native,sgx_only,hybrid"
+    "terse:terse:native,sgx,hybrid"
     "rsa:rsa:native,sgx"
     "ecc:ecc:native,sgx"
 )
@@ -58,30 +58,38 @@ build_benchmark() {
 
     echo "Building $bench for $platform..."
 
-    case $platform in
-        native)
-            if [ "$prefix" == "aes" ] || [ "$prefix" == "rsa" ] || [ "$prefix" == "ecc" ]; then
-                g++ -std=c++17 -O3 -DNDEBUG -march=native -o "$program" "${prefix}_benchmark.cpp" -lssl -lcrypto
-            else
-                g++ -std=c++17 -O3 -DNDEBUG -march=native -o "$program" "${prefix}_benchmark.cpp"
-            fi
-            ;;
-        sgx|sgx_only|hybrid)
-            if [ "$prefix" == "aes" ] || [ "$prefix" == "rsa" ] || [ "$prefix" == "ecc" ]; then
-                g++ -std=c++17 -O3 -DNDEBUG -march=native -o "$program" "${prefix}_benchmark.cpp" -lssl -lcrypto
-            else
-                g++ -std=c++17 -O3 -DNDEBUG -march=native -o "$program" "${prefix}_benchmark.cpp"
-            fi
-            gramine-manifest "$manifest_template" "$manifest"
-            gramine-sgx-sign --manifest "$manifest" --output "$manifest_sgx"
-            ;;
-        *)
-            echo "Error: Invalid platform '$platform'" >&2
-            cd ..
-            exit 1
-            ;;
-    esac
-
+case $platform in
+    native)
+        if [ "$prefix" == "terse" ]; then
+            g++ -std=c++17 -O3 -DNDEBUG -march=native -o "$program" \
+                "${prefix}_benchmark.cpp" \
+                -lntl -lgmp -lgmpxx -pthread
+        elif [ "$prefix" == "aes" ] || [ "$prefix" == "rsa" ] || [ "$prefix" == "ecc" ]; then
+            g++ -std=c++17 -O3 -DNDEBUG -march=native -o "$program" \
+                "${prefix}_benchmark.cpp" \
+                -lssl -lcrypto
+        else
+            g++ -std=c++17 -O3 -DNDEBUG -march=native -o "$program" \
+                "${prefix}_benchmark.cpp"
+        fi
+        ;;
+    sgx|sgx_only|hybrid)
+        if [ "$prefix" == "terse" ]; then
+            g++ -std=c++17 -O3 -DNDEBUG -march=native -o "$program" \
+                "${prefix}_benchmark.cpp" \
+                -lntl -lgmp -lgmpxx -pthread
+        elif [ "$prefix" == "aes" ] || [ "$prefix" == "rsa" ] || [ "$prefix" == "ecc" ]; then
+            g++ -std=c++17 -O3 -DNDEBUG -march=native -o "$program" \
+                "${prefix}_benchmark.cpp" \
+                -lssl -lcrypto
+        else
+            g++ -std=c++17 -O3 -DNDEBUG -march=native -o "$program" \
+                "${prefix}_benchmark.cpp"
+        fi
+        gramine-manifest "$manifest_template" "$manifest"
+        gramine-sgx-sign --manifest "$manifest" --output "$manifest_sgx"
+        ;;
+esac
     cd ..
     echo "Build complete: $bench ($platform)"
 }

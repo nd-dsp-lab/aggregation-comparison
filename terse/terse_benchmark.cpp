@@ -1,207 +1,300 @@
-#ifdef __gramine__
-#include <gramine/api.hh>
-#endif
-
+#include "terse_benchmark.h"
 #include <iostream>
 #include <fstream>
-#include <vector>
-#include <chrono>
-#include <random>
-#include <cstring>
-#include <cstdint>
-#include <string>
-#include <stdexcept>
 #include <iomanip>
-#include <cstdlib>
+#include <cstring>
+#include <random>
 
-struct SharedMemory {
-    std::vector<uint64_t> input_data;
-    std::vector<uint64_t> intermediate_results;
-    std::vector<uint64_t> final_results;
-    std::vector<uint64_t> lookup_table;
-};
-
-void generate_terse_data(SharedMemory& mem, uint64_t num_devices, uint64_t records_per_device) {
-    std::random_device rd;
-    std::mt19937 gen(rd());
-    std::uniform_int_distribution<uint64_t> value_dist(1, 1000000);
-    uint64_t total_records = num_devices * records_per_device;
-
-    mem.input_data.resize(total_records);
-    for (uint64_t i = 0; i < total_records; ++i) {
-        mem.input_data[i] = value_dist(gen);
-    }
+uint64_t TERSEBenchmark::get_time_us() {
+    return std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::high_resolution_clock::now().time_since_epoch()
+    ).count();
 }
 
-void initialize_shared_memory(SharedMemory& mem, uint64_t num_devices, uint64_t records_per_device) {
-    const size_t LOOKUP_TABLE_SIZE = 16000;
+void TERSEBenchmark::generate_all_test_data() {
+    DiscreteLaplacian dl;
+    uint64_t max_val = (1ULL << config.plain_bits) - 1;
 
-    mem.intermediate_results.resize(records_per_device);
-    mem.final_results.resize(records_per_device);
-    mem.lookup_table.resize(LOOKUP_TABLE_SIZE);
-
-    std::random_device rd;
-    std::mt19937 gen(rd());
-    std::uniform_int_distribution<uint64_t> value_dist(1, 1000);
-    for (size_t i = 0; i < LOOKUP_TABLE_SIZE; ++i) {
-        mem.lookup_table[i] = value_dist(gen);
-    }
-}
-
-long long get_time_us() {
-#ifdef __gramine__
-    struct timespec ts;
-    gramine_clock_gettime(CLOCK_MONOTONIC, &ts);
-    return ts.tv_sec * 1000000LL + ts.tv_nsec / 1000LL;
-#else
-    auto now = std::chrono::high_resolution_clock::now();
-    return std::chrono::duration_cast<std::chrono::microseconds>(now.time_since_epoch()).count();
-#endif
-}
-
-void run_benchmark(const std::string& platform, SharedMemory& mem, uint64_t num_devices, uint64_t records_per_device) {
-    long long total_start_us = get_time_us();
-
-    long long sum_start_us = get_time_us();
-    for (uint64_t round = 0; round < records_per_device; ++round) {
-        uint64_t round_sum = 0;
-        for (uint64_t device = 0; device < num_devices; ++device) {
-            round_sum += mem.input_data[device * records_per_device + round];
+    all_user_inputs.resize(config.records_per_device);
+    for (uint64_t round = 0; round < config.records_per_device; round++) {
+        all_user_inputs[round].resize(config.num_devices);
+        for (uint64_t device = 0; device < config.num_devices; device++) {
+            all_user_inputs[round][device] = dl.uniform_64(max_val);
         }
-        mem.intermediate_results[round] = round_sum;
     }
-    long long sum_time_us = get_time_us() - sum_start_us;
-
-    long long lookup_start_us = get_time_us();
-    volatile uint64_t total = 0;
-    for (uint64_t round = 0; round < records_per_device; ++round) {
-        uint64_t round_sum = mem.intermediate_results[round];
-        uint64_t lookup_value = mem.lookup_table[round_sum % mem.lookup_table.size()];
-        uint64_t result = round_sum + lookup_value;
-        mem.final_results[round] = result;
-        total += result;
-    }
-    long long lookup_time_us = get_time_us() - lookup_start_us;
-
-    long long total_time_us = get_time_us() - total_start_us;
-
-    double avg_sum_us = (records_per_device > 0) ? (double)sum_time_us / records_per_device : 0.0;
-    double avg_lookup_us = (records_per_device > 0) ? (double)lookup_time_us / records_per_device : 0.0;
-    double avg_total_us = (records_per_device > 0) ? (double)total_time_us / records_per_device : 0.0;
-
-    std::cout << std::fixed << std::setprecision(4);
-    std::cout << "Total: " << total << std::endl;
-    std::cout << "Average time per round:" << std::endl;
-    std::cout << "  Sum:     " << avg_sum_us << " us" << std::endl;
-    std::cout << "  Lookup:  " << avg_lookup_us << " us" << std::endl;
-    std::cout << "  Total:   " << avg_total_us << " us" << std::endl;
-
-    const std::string results_filename = "terse_results.csv";
-    std::ofstream results_file;
-    std::ifstream check_file(results_filename);
-    bool file_exists = check_file.good();
-    check_file.close();
-    results_file.open(results_filename, std::ios_base::app);
-    if (!file_exists) {
-        results_file << "platform,num_devices,records_per_device,avg_sum_per_round_us,avg_lookup_per_round_us,avg_total_per_round_us\n";
-    }
-    results_file << platform << "," << num_devices << "," << records_per_device << ","
-                 << avg_sum_us << "," << avg_lookup_us << "," << avg_total_us << "\n";
-    results_file.close();
 }
 
-void run_hybrid_native(SharedMemory& mem, uint64_t num_devices, uint64_t records_per_device) {
-    long long sum_start_us = get_time_us();
-    for (uint64_t round = 0; round < records_per_device; ++round) {
-        uint64_t round_sum = 0;
-        for (uint64_t device = 0; device < num_devices; ++device) {
-            round_sum += mem.input_data[device * records_per_device + round];
-        }
-        mem.intermediate_results[round] = round_sum;
-    }
-    long long sum_time_us = get_time_us() - sum_start_us;
+TERSEBenchmark::TERSEBenchmark(const BenchmarkConfig& config) : config(config) {
+    std::cout << "Initializing TERSE with:" << std::endl;
+    std::cout << "  num_devices: " << config.num_devices << std::endl;
+    std::cout << "  plain_bits: " << config.plain_bits << std::endl;
+    std::cout << "  scale: " << config.scale << std::endl;
 
-    double avg_sum_us = (records_per_device > 0) ? (double)sum_time_us / records_per_device : 0.0;
+    double beta = 1.0 / config.num_devices;
+    std::cout << "  beta: " << beta << std::endl;
+    std::cout << "  scheme: " << (config.scheme == NS ? "NS" : "MS") << std::endl;
 
-    std::cout << std::fixed << std::setprecision(4);
-    std::cout << "Native phase - Average per round:" << std::endl;
-    std::cout << "  Sum:  " << avg_sum_us << " us" << std::endl;
+    std::cout << "Creating Aggregator_RNS..." << std::endl;
+
+    agg = new Aggregator_RNS(
+        config.plain_bits,
+        config.scale,
+        config.num_devices,
+        config.scheme,
+        beta,
+        config.plain_bits
+    );
+
+    std::cout << "Aggregator_RNS created successfully" << std::endl;
+
+    auto params_pair = agg->parms_ptrs();
+    ctext_parms = params_pair.first;
+    plain_parms = params_pair.second;
+
+    agg_key = new Polynomial(ctext_parms);
+    agg->secret_keys(*agg_key, secret_keys);
+
+    uint64_t ts = 0xDEADBEEF;
+    pk = new Polynomial(agg->public_key(ts));
+
+    std::cout << "Generating test data..." << std::endl;
+    generate_all_test_data();
+    std::cout << "Benchmark initialized." << std::endl;
 }
 
-void run_hybrid_sgx(SharedMemory& mem, uint64_t num_devices, uint64_t records_per_device) {
-    long long lookup_start_us = get_time_us();
-    volatile uint64_t total = 0;
-    for (uint64_t round = 0; round < records_per_device; ++round) {
-        uint64_t round_sum = mem.intermediate_results[round];
-        uint64_t lookup_value = mem.lookup_table[round_sum % mem.lookup_table.size()];
-        uint64_t result = round_sum + lookup_value;
-        mem.final_results[round] = result;
-        total += result;
+TERSEBenchmark::~TERSEBenchmark() {
+    delete agg_key;
+    delete pk;
+    delete agg;
+}
+
+void TERSEBenchmark::run_round(uint64_t round_idx,
+                               double& sum_time_us,
+                               double& lookup_time_us) {
+    std::vector<Polynomial> ctexts;
+    ctexts.reserve(config.num_devices);
+
+    auto sum_start = get_time_us();
+
+    // Encryption
+    for(size_t i = 0; i < config.num_devices; i++) {
+        Polynomial input(plain_parms);
+        input.zero();
+        input.at(0, 0) = all_user_inputs[round_idx][i] % plain_parms->moduli(0);
+
+        double noise_time, enc_time;
+        Polynomial ct = agg->enc(input, secret_keys[i], *pk,
+                                true, noise_time, enc_time);
+        ctexts.push_back(ct);
     }
-    long long lookup_time_us = get_time_us() - lookup_start_us;
 
-    double avg_lookup_us = (records_per_device > 0) ? (double)lookup_time_us / records_per_device : 0.0;
+    // Explicit aggregation (to match hybrid)
+    Polynomial aggregated(ctext_parms);
+    aggregated.zero();
+    for(const auto& ct : ctexts) {
+        aggregated += ct;
+    }
 
-    std::cout << std::fixed << std::setprecision(4);
-    std::cout << "Total: " << total << std::endl;
-    std::cout << "SGX phase - Average per round:" << std::endl;
-    std::cout << "  Lookup: " << avg_lookup_us << " us" << std::endl;
+    auto sum_end = get_time_us();
+    sum_time_us = sum_end - sum_start;
+
+    auto lookup_start = get_time_us();
+
+    // Decryption only (single aggregated ciphertext)
+    std::vector<Polynomial> agg_vec = {aggregated};
+    double dec_time;
+    uint64_t ts = 0xDEADBEEF;
+    Polynomial result = agg->dec(*agg_key, agg_vec, ts, dec_time, 1);
+
+    auto lookup_end = get_time_us();
+    lookup_time_us = lookup_end - lookup_start;
+}
+
+void TERSEBenchmark::run_hybrid_native(uint64_t round_idx,
+                                      HybridState& state,
+                                      double& sum_time_us) {
+    std::vector<Polynomial> ctexts;
+    ctexts.reserve(config.num_devices);
+
+    auto sum_start = get_time_us();
+
+    // Encrypt all user inputs
+    for(size_t i = 0; i < config.num_devices; i++) {
+        Polynomial input(plain_parms);
+        input.zero();
+        input.at(0, 0) = all_user_inputs[round_idx][i] % plain_parms->moduli(0);
+
+        double noise_time, enc_time;
+        Polynomial ct = agg->enc(input, secret_keys[i], *pk,
+                                true, noise_time, enc_time);
+        ctexts.push_back(ct);
+    }
+
+    // Aggregate ciphertexts (outside SGX)
+    Polynomial aggregated(ctext_parms);
+    aggregated.zero();
+    for(const auto& ct : ctexts) {
+        aggregated += ct;
+    }
+
+    auto sum_end = get_time_us();
+    sum_time_us = sum_end - sum_start;
+
+    // Serialize aggregated ciphertext for SGX
+    state.data_size = aggregated.size_in_bytes();
+    state.serialized_agg_ctext = (uint64_t*)malloc(state.data_size);
+    if (!state.serialized_agg_ctext) {
+        throw std::runtime_error("Failed to allocate memory for serialization");
+    }
+    memcpy(state.serialized_agg_ctext, aggregated.buffer(), state.data_size);
+}
+
+void TERSEBenchmark::run_hybrid_sgx(const HybridState& state,
+                                   double& lookup_time_us) {
+    if (!state.serialized_agg_ctext) {
+        throw std::runtime_error("Invalid hybrid state");
+    }
+
+    // Deserialize aggregated ciphertext
+    Polynomial aggregated(ctext_parms, state.serialized_agg_ctext);
+
+    auto lookup_start = get_time_us();
+
+    // Key lookup and decryption inside SGX
+    std::vector<Polynomial> ctexts = {aggregated};
+    double dec_time;
+    uint64_t ts = 0xDEADBEEF;
+    Polynomial result = agg->dec(*agg_key, ctexts, ts, dec_time, 1);
+
+    auto lookup_end = get_time_us();
+    lookup_time_us = lookup_end - lookup_start;
 }
 
 int main(int argc, char* argv[]) {
-    setenv("MALLOC_ARENA_MAX", "1", 1);
-
-    if (argc < 2) {
-        std::cerr << "Usage: " << argv[0] << " <command> [args...]" << std::endl;
-        return 1;
-    }
-
-    std::string command = argv[1];
-
-    if (command == "generate") {
-        if (argc != 4) {
-            std::cerr << "Error: generate requires <num_devices> and <records_per_device>." << std::endl;
-            return 1;
-        }
-        uint64_t num_devices = std::stoull(argv[2]);
-        uint64_t records_per_device = std::stoull(argv[3]);
-        SharedMemory mem;
-        generate_terse_data(mem, num_devices, records_per_device);
-        std::cout << "Generated data for " << num_devices << " devices, " 
-                  << records_per_device << " records each." << std::endl;
-        return 0;
-    }
-
     if (argc != 4) {
-        std::cerr << "Error: Command requires <num_devices> and <records_per_device>." << std::endl;
+        std::cerr << "Usage: " << argv[0]
+                  << " <platform> <num_devices> <records_per_device>"
+                  << std::endl;
         return 1;
     }
 
+    std::string platform = argv[1];
     uint64_t num_devices = std::stoull(argv[2]);
     uint64_t records_per_device = std::stoull(argv[3]);
 
-    SharedMemory mem;
+    BenchmarkConfig config;
+    config.num_devices = num_devices;
+    config.records_per_device = records_per_device;
+    config.plain_bits = 32;
+    config.scale = 0.5f;
+    config.scheme = NS;
+    config.platform = platform;
 
-    if (command == "native" || command == "sgx_only") {
-        std::cout << "Generating and loading data into memory..." << std::endl;
-        generate_terse_data(mem, num_devices, records_per_device);
-        initialize_shared_memory(mem, num_devices, records_per_device);
-        std::cout << "Memory initialized. Starting benchmark..." << std::endl;
-        run_benchmark(command, mem, num_devices, records_per_device);
-        std::cout << "Results appended to terse_results.csv" << std::endl;
-    } else if (command == "hybrid_native") {
-        std::cout << "Generating and loading data into memory..." << std::endl;
-        generate_terse_data(mem, num_devices, records_per_device);
-        initialize_shared_memory(mem, num_devices, records_per_device);
-        std::cout << "Memory initialized. Starting native aggregation..." << std::endl;
-        run_hybrid_native(mem, num_devices, records_per_device);
-    } else if (command == "hybrid_sgx") {
-        std::cout << "Initializing memory for hybrid (SGX part)..." << std::endl;
-        initialize_shared_memory(mem, num_devices, records_per_device);
-        std::cout << "Memory initialized. Starting SGX lookup..." << std::endl;
-        run_hybrid_sgx(mem, num_devices, records_per_device);
+    TERSEBenchmark benchmark(config);
+
+    std::string results_file = "terse_results.csv";
+    bool file_exists = std::ifstream(results_file).good();
+
+    std::ofstream outfile(results_file, std::ios::app);
+    if (!file_exists) {
+        outfile << "platform,num_devices,records_per_device,"
+                << "avg_sum_per_round_us,avg_lookup_per_round_us,"
+                << "avg_total_per_round_us" << std::endl;
+    }
+
+    if (platform == "native" || platform == "sgx") {
+        double total_sum = 0.0;
+        double total_lookup = 0.0;
+
+        for(uint64_t round = 0; round < records_per_device; round++) {
+            double sum_time, lookup_time;
+            benchmark.run_round(round, sum_time, lookup_time);
+            total_sum += sum_time;
+            total_lookup += lookup_time;
+        }
+
+        double avg_sum = total_sum / records_per_device;
+        double avg_lookup = total_lookup / records_per_device;
+        double avg_total = avg_sum + avg_lookup;
+
+        outfile << platform << "," << num_devices << ","
+                << records_per_device << "," << avg_sum << ","
+                << avg_lookup << "," << avg_total << std::endl;
+
+        std::cout << "\n=== Results ===" << std::endl;
+        std::cout << std::fixed << std::setprecision(4);
+        std::cout << "Avg sum: " << avg_sum << " us" << std::endl;
+        std::cout << "Avg lookup: " << avg_lookup << " us" << std::endl;
+        std::cout << "Avg total: " << avg_total << " us" << std::endl;
+
+    } else if (platform == "hybrid_native") {
+        double total_sum = 0.0;
+
+        for(uint64_t round = 0; round < records_per_device; round++) {
+            HybridState state;
+            double sum_time;
+            benchmark.run_hybrid_native(round, state, sum_time);
+            total_sum += sum_time;
+        }
+
+        double avg_sum = total_sum / records_per_device;
+
+        std::cout << std::fixed << std::setprecision(4);
+        std::cout << "Sum: " << avg_sum << std::endl;
+
+    } else if (platform == "hybrid_sgx") {
+        double total_lookup = 0.0;
+
+        for(uint64_t round = 0; round < records_per_device; round++) {
+            HybridState state;
+            Polynomial dummy_agg(benchmark.get_ctext_parms());
+            dummy_agg.zero();
+
+            state.data_size = dummy_agg.size_in_bytes();
+            state.serialized_agg_ctext = (uint64_t*)malloc(state.data_size);
+            memcpy(state.serialized_agg_ctext, dummy_agg.buffer(), state.data_size);
+
+            double lookup_time;
+            benchmark.run_hybrid_sgx(state, lookup_time);
+            total_lookup += lookup_time;
+        }
+
+        double avg_lookup = total_lookup / records_per_device;
+
+        std::cout << std::fixed << std::setprecision(4);
+        std::cout << "Lookup: " << avg_lookup << std::endl;
+
+    } else if (platform == "hybrid") {
+        double total_sum = 0.0;
+        double total_lookup = 0.0;
+
+        for(uint64_t round = 0; round < records_per_device; round++) {
+            HybridState state;
+            double sum_time, lookup_time;
+
+            benchmark.run_hybrid_native(round, state, sum_time);
+            benchmark.run_hybrid_sgx(state, lookup_time);
+
+            total_sum += sum_time;
+            total_lookup += lookup_time;
+        }
+
+        double avg_sum = total_sum / records_per_device;
+        double avg_lookup = total_lookup / records_per_device;
+        double avg_total = avg_sum + avg_lookup;
+
+        outfile << platform << "," << num_devices << ","
+                << records_per_device << "," << avg_sum << ","
+                << avg_lookup << "," << avg_total << std::endl;
+
+        std::cout << "\n=== Hybrid Results ===" << std::endl;
+        std::cout << std::fixed << std::setprecision(4);
+        std::cout << "Avg sum (native): " << avg_sum << " us" << std::endl;
+        std::cout << "Avg lookup (SGX): " << avg_lookup << " us" << std::endl;
+        std::cout << "Avg total: " << avg_total << " us" << std::endl;
+
     } else {
-        std::cerr << "Unknown command: " << command << std::endl;
+        std::cerr << "Unknown platform: " << platform << std::endl;
         return 1;
     }
 

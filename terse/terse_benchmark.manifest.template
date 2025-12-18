@@ -9,7 +9,7 @@ fs.mounts = [
   { path = "/etc", uri = "file:/etc" },
 ]
 
-sgx.debug = true
+sgx.debug = false
 sgx.enclave_size = "128G"
 sgx.max_threads = 4
 sgx.remote_attestation = "none"
