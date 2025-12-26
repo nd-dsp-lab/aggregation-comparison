@@ -1,8 +1,8 @@
 #!/bin/bash
 set -e
 
-DEVICE_COUNTS=(10000 100000 1000000)
-RECORD_COUNTS=(15)
+DEVICE_COUNTS=(1000000)
+RECORD_COUNTS=(5)
 
 BENCHMARKS=(
     "aes:aes:native,sgx"
@@ -58,38 +58,38 @@ build_benchmark() {
 
     echo "Building $bench for $platform..."
 
-case $platform in
-    native)
-        if [ "$prefix" == "terse" ]; then
-            g++ -std=c++17 -O3 -DNDEBUG -march=native -o "$program" \
-                "${prefix}_benchmark.cpp" \
-                -lntl -lgmp -lgmpxx -pthread
-        elif [ "$prefix" == "aes" ] || [ "$prefix" == "rsa" ] || [ "$prefix" == "ecc" ]; then
-            g++ -std=c++17 -O3 -DNDEBUG -march=native -o "$program" \
-                "${prefix}_benchmark.cpp" \
-                -lssl -lcrypto
-        else
-            g++ -std=c++17 -O3 -DNDEBUG -march=native -o "$program" \
-                "${prefix}_benchmark.cpp"
-        fi
-        ;;
-    sgx|sgx_only|hybrid)
-        if [ "$prefix" == "terse" ]; then
-            g++ -std=c++17 -O3 -DNDEBUG -march=native -o "$program" \
-                "${prefix}_benchmark.cpp" \
-                -lntl -lgmp -lgmpxx -pthread
-        elif [ "$prefix" == "aes" ] || [ "$prefix" == "rsa" ] || [ "$prefix" == "ecc" ]; then
-            g++ -std=c++17 -O3 -DNDEBUG -march=native -o "$program" \
-                "${prefix}_benchmark.cpp" \
-                -lssl -lcrypto
-        else
-            g++ -std=c++17 -O3 -DNDEBUG -march=native -o "$program" \
-                "${prefix}_benchmark.cpp"
-        fi
-        gramine-manifest "$manifest_template" "$manifest"
-        gramine-sgx-sign --manifest "$manifest" --output "$manifest_sgx"
-        ;;
-esac
+    case $platform in
+        native)
+            if [ "$prefix" == "terse" ]; then
+                g++ -std=c++17 -O3 -DNDEBUG -march=native -o "$program" \
+                    "${prefix}_benchmark.cpp" \
+                    -lntl -lgmp -lgmpxx -pthread
+            elif [ "$prefix" == "aes" ] || [ "$prefix" == "rsa" ] || [ "$prefix" == "ecc" ]; then
+                g++ -std=c++17 -O3 -DNDEBUG -march=native -o "$program" \
+                    "${prefix}_benchmark.cpp" \
+                    -lssl -lcrypto
+            else
+                g++ -std=c++17 -O3 -DNDEBUG -march=native -o "$program" \
+                    "${prefix}_benchmark.cpp"
+            fi
+            ;;
+        sgx|sgx_only|hybrid)
+            if [ "$prefix" == "terse" ]; then
+                g++ -std=c++17 -O3 -DNDEBUG -march=native -o "$program" \
+                    "${prefix}_benchmark.cpp" \
+                    -lntl -lgmp -lgmpxx -pthread
+            elif [ "$prefix" == "aes" ] || [ "$prefix" == "rsa" ] || [ "$prefix" == "ecc" ]; then
+                g++ -std=c++17 -O3 -DNDEBUG -march=native -o "$program" \
+                    "${prefix}_benchmark.cpp" \
+                    -lssl -lcrypto
+            else
+                g++ -std=c++17 -O3 -DNDEBUG -march=native -o "$program" \
+                    "${prefix}_benchmark.cpp"
+            fi
+            gramine-manifest "$manifest_template" "$manifest"
+            gramine-sgx-sign --manifest "$manifest" --output "$manifest_sgx"
+            ;;
+    esac
     cd ..
     echo "Build complete: $bench ($platform)"
 }
@@ -251,7 +251,19 @@ loop_everything() {
         echo "============================================================"
         echo "= BENCHMARK: $dir"
         echo "============================================================"
-        loop_all_platforms "$dir"
+
+        # Parse the platforms string and loop through each
+        IFS=',' read -ra platform_array <<< "$platforms"
+        for platform in "${platform_array[@]}"; do
+            echo
+            echo "########## PLATFORM: $platform ##########"
+            loop_benchmark "$dir" "$platform"
+        done
+
+        echo
+        echo "============================================================"
+        echo "= COMPLETED: $dir"
+        echo "============================================================"
     done
 
     echo
@@ -266,28 +278,24 @@ loop_everything() {
     done
 }
 
+
 aggregate_results() {
     local output_file="aggregated_results.csv"
 
     echo "Aggregating results into $output_file..."
 
-    # Create header
     echo "benchmark,platform,num_devices,records_per_device,setup_us,avg_decrypt_sum_per_round_us,avg_final_per_round_us,avg_total_per_round_us" > "$output_file"
 
-    # Process each benchmark
     for entry in "${BENCHMARKS[@]}"; do
         IFS=':' read -r dir prefix platforms <<< "$entry"
         local results_file="$dir/${prefix}_results.csv"
 
         if [ -f "$results_file" ]; then
             if [ "$prefix" == "terse" ]; then
-                # Terse has different format: platform,devices,records,sum,lookup,total
-                # Map to: benchmark,platform,devices,records,0,sum,lookup,total
                 tail -n +2 "$results_file" | while IFS=, read -r platform devices records sum lookup total; do
                     echo "$prefix,$platform,$devices,$records,0,$sum,$lookup,$total" >> "$output_file"
                 done
             else
-                # Crypto benchmarks: platform,devices,records,setup,decrypt,final,total
                 tail -n +2 "$results_file" | while IFS=, read -r platform devices records setup decrypt final total; do
                     echo "$prefix,$platform,$devices,$records,$setup,$decrypt,$final,$total" >> "$output_file"
                 done
@@ -300,7 +308,6 @@ aggregate_results() {
     echo "Aggregation complete: $output_file"
     echo "Total rows: $(tail -n +2 "$output_file" | wc -l)"
 }
-
 
 clean_benchmark() {
     local bench=$1
